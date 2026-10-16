@@ -1,4 +1,5 @@
 package com.example.leituradiariadabiblia
+
 /**
  * Programa "Leitura da Bíblia" transcrito do PDF enviado.
  * Cada item representa um grupo de capítulos do programa original.
@@ -9,7 +10,7 @@ data class BibleReading(
     val book: String,
     val chapters: String
 ) {
-    val reference: String get() = "$book $chapters"
+    val reference: String get() = if (chapters.isBlank()) book else "$book $chapters"
 }
 
 /**

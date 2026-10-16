@@ -13,6 +13,9 @@ import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -57,9 +60,11 @@ class MainActivity : Activity() {
     private val selectedIds = linkedSetOf<String>()
     private lateinit var root: LinearLayout
     private var currentReading: BibleReading? = null
+    private var chronologicalMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        chronologicalMode = prefs().getBoolean("chronological_mode", false)
         showHome()
     }
 
@@ -388,9 +393,57 @@ class MainActivity : Activity() {
         pending.cancel()
     }
 
+    /** Ícones vetoriais simples: relógio, lista com tópicos e fluxo conectado. */
+    private inner class ModeIconView(context: Context, private val iconType: Int) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(105, 110, 108)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val x = w * 0.12f
+            val y = h * 0.12f
+            when (iconType) {
+                0 -> { // Relógio para lembrete
+                    canvas.drawCircle(w * .5f, h * .5f, w * .34f, paint)
+                    canvas.drawLine(w * .5f, h * .5f, w * .5f, h * .29f, paint)
+                    canvas.drawLine(w * .5f, h * .5f, w * .68f, h * .59f, paint)
+                    canvas.drawArc(w*.20f, h*.02f, w*.80f, h*.20f, 200f, 140f, false, paint)
+                }
+                1 -> { // Lista com tópicos: três pontos e linhas
+                    val dotPaint = Paint(paint).apply { style = Paint.Style.FILL }
+                    for (i in 0..2) {
+                        val yy = h * (0.25f + i * 0.25f)
+                        canvas.drawCircle(w * .17f, yy, dp(2).toFloat(), dotPaint)
+                        canvas.drawLine(w * .34f, yy, w * .88f, yy, paint)
+                    }
+                }
+                else -> { // Fluxo cronológico: nós conectados com setas
+                    val path = Path().apply {
+                        moveTo(w*.18f,h*.22f); lineTo(w*.48f,h*.22f); lineTo(w*.48f,h*.48f)
+                        lineTo(w*.78f,h*.48f); lineTo(w*.78f,h*.75f)
+                    }
+                    canvas.drawPath(path, paint)
+                    canvas.drawCircle(w*.18f,h*.22f,dp(2).toFloat(),paint)
+                    canvas.drawCircle(w*.48f,h*.48f,dp(2).toFloat(),paint)
+                    canvas.drawCircle(w*.78f,h*.75f,dp(2).toFloat(),paint)
+                    canvas.drawLine(w*.68f,h*.65f,w*.78f,h*.75f,paint)
+                    canvas.drawLine(w*.88f,h*.65f,w*.78f,h*.75f,paint)
+                }
+            }
+        }
+    }
+
     private fun showHome() {
         currentReading = null
         val completed = completedMap()
+        val readings = if (chronologicalMode) ChronologicalBibleReadingData.all else BibleReadingData.all
         root = baseColumn()
 
         val banner = LinearLayout(this).apply {
@@ -402,8 +455,8 @@ class MainActivity : Activity() {
         banner.addView(text("P R O G R A M A", 14f, false, Color.BLACK))
         root.addView(banner, LinearLayout.LayoutParams(-1, -2))
 
-        val doneCount = BibleReadingData.all.count { completed.containsKey(it.id) }
-        val totalCount = BibleReadingData.all.size
+        val doneCount = readings.count { completed.containsKey(it.id) }
+        val totalCount = readings.size
         root.addView(text(
             "Hoje: ${today()}   •   Progresso: $doneCount/$totalCount (${if (totalCount == 0) 0 else (doneCount * 100.0 / totalCount).toInt().coerceAtLeast(if (doneCount > 0) 1 else 0)}%)",
             13f, true, Color.rgb(45, 65, 45)
@@ -447,11 +500,55 @@ class MainActivity : Activity() {
         val reminderEnabled = reminderPrefs.getBoolean("enabled", false)
         val reminderHour = reminderPrefs.getInt("hour", 20)
         val reminderMinute = reminderPrefs.getInt("minute", 0)
-        val reminderButton = button(
-            if (reminderEnabled) "Lembrete diário: %02d:%02d  •  Alterar".format(reminderHour, reminderMinute)
-            else "Agendar lembrete diário"
-        ) { showReminderDialog() }
-        root.addView(reminderButton, LinearLayout.LayoutParams(-1, dp(44)).apply {
+
+        // Ações lado a lado com ícones desenhados em código, sem depender de imagens externas.
+        val modeButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        fun modeButton(label: String, iconType: Int, action: () -> Unit): LinearLayout =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                setPadding(dp(6), dp(7), dp(6), dp(7))
+                background = roundedBackground(Color.rgb(224, 224, 224), 5)
+                elevation = dp(1).toFloat()
+                isClickable = true
+                isFocusable = true
+                val icon = ModeIconView(this@MainActivity, iconType).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
+                        rightMargin = dp(7)
+                    }
+                }
+                addView(icon)
+                addView(TextView(this@MainActivity).apply {
+                    text = label
+                    textSize = 10.5f
+                    setTextColor(Color.rgb(40, 40, 40))
+                    setTypeface(typeface, Typeface.BOLD)
+                    gravity = Gravity.CENTER_VERTICAL
+                    maxLines = 2
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                setOnClickListener { action() }
+            }
+
+        modeButtons.addView(modeButton(
+            if (reminderEnabled) "Lembrete diário\n%02d:%02d · Alterar".format(reminderHour, reminderMinute)
+            else "Agendar lembrete diário", 0
+        ) { showReminderDialog() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+            rightMargin = dp(5)
+        })
+
+        modeButtons.addView(modeButton(
+            if (chronologicalMode) "Ordem dos livros bíblicos" else "Ordem cronológica",
+            if (chronologicalMode) 1 else 2
+        ) {
+            chronologicalMode = !chronologicalMode
+            prefs().edit().putBoolean("chronological_mode", chronologicalMode).apply()
+            showHome()
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        root.addView(modeButtons, LinearLayout.LayoutParams(-1, -2).apply {
             bottomMargin = dp(8)
         })
 
@@ -464,12 +561,15 @@ class MainActivity : Activity() {
         columnHeader.addView(text("DATA", 9f, true, Color.DKGRAY), LinearLayout.LayoutParams(dp(67), -2))
         columnHeader.addView(text("HORA", 9f, true, Color.DKGRAY), LinearLayout.LayoutParams(dp(43), -2))
         columnHeader.addView(text("TRECHO / CAPÍTULOS", 9f, true, Color.DKGRAY), LinearLayout.LayoutParams(0, -2, 1f))
-        columnHeader.addView(text("✓", 13f, true, Color.DKGRAY), LinearLayout.LayoutParams(dp(28), -2))
+        if (!chronologicalMode) {
+            columnHeader.addView(text("✓", 13f, true, Color.DKGRAY), LinearLayout.LayoutParams(dp(28), -2))
+        }
         root.addView(columnHeader, LinearLayout.LayoutParams(-1, -2).apply {
             bottomMargin = dp(4)
         })
 
-        // Cabeçalho fixo: acompanha o livro atual durante a rolagem.
+        // Na ordem habitual, mantém o cabeçalho fixo de seção/livro.
+        // Na ordem cronológica, o único cabeçalho fixo é Data/Hora/Trecho.
         val stickyHeader = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(7), dp(8), dp(7))
@@ -479,9 +579,11 @@ class MainActivity : Activity() {
         val stickyBook = text("GÊNESIS", 21f, true)
         stickyHeader.addView(stickySection)
         stickyHeader.addView(stickyBook)
-        root.addView(stickyHeader, LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(4)
-        })
+        if (!chronologicalMode) {
+            root.addView(stickyHeader, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(4)
+            })
+        }
 
         val scroll = ScrollView(this)
         scroll.isFillViewport = false
@@ -495,9 +597,9 @@ class MainActivity : Activity() {
         var currentSection = ""
         var currentBook = ""
         var firstBookHeader = true
-        BibleReadingData.all.forEach { reading ->
-            val color = sectionColor(reading.section)
-            if (reading.section != currentSection || reading.book != currentBook) {
+        readings.forEach { reading ->
+            val color = if (chronologicalMode) Color.WHITE else sectionColor(reading.section)
+            if (!chronologicalMode && (reading.section != currentSection || reading.book != currentBook)) {
                 currentSection = reading.section
                 currentBook = reading.book
 
@@ -562,7 +664,11 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(5), dp(2), dp(2), dp(2))
             }
-            chapterInfo.addView(text(reading.chapters, 16f, false))
+            chapterInfo.addView(text(
+                if (chronologicalMode) reading.reference else reading.chapters,
+                if (chronologicalMode) 14f else 16f,
+                false
+            ))
             if (doneDate != null) {
                 chapterInfo.addView(text("  Lido", 11f, true, Color.rgb(35, 105, 55)))
             }
@@ -617,7 +723,7 @@ class MainActivity : Activity() {
             }
         }
 
-        scroll.viewTreeObserver.addOnScrollChangedListener {
+        if (!chronologicalMode) scroll.viewTreeObserver.addOnScrollChangedListener {
             // Se nenhum cabeçalho de livro posterior chegou ao topo da lista,
             // estamos no início: restaura o primeiro livro em vez de manter
             // o último cabeçalho visitado (por exemplo, Êxodo).
@@ -734,10 +840,52 @@ class MainActivity : Activity() {
             }.show()
     }
 
+    /**
+     * Converte leituras com mais de um livro em referências que o WOL entende.
+     * Ex.: "Obadias/Jonas" + "Livro completo" -> "Obadias 1-21; Jonas 1-4".
+     * Para leituras comuns, preserva a pesquisa original.
+     */
+    private fun buildBibleSearchQuery(reading: BibleReading): String {
+        val book = reading.book.trim()
+        val chapters = reading.chapters.trim()
+        if (reading.section == "ORDEM CRONOLÓGICA" && chapters.isBlank()) {
+            return when (book) {
+                "Obadias; Jeremias 1-2" -> "Obadias 1:1-21; Jeremias 1-2"
+                "2 João / 3 João / Judas (completo)" ->
+                    "2 João 1:1-13; 3 João 1:1-14; Judas 1:1-25"
+                "Filemon; 1 Pedro 1-2" -> "Filêmon 1:1-25; 1 Pedro 1-2"
+                "Filemon; 1 Pedro 3-5" -> "Filêmon 1:1-25; 1 Pedro 3-5"
+                else -> book
+            }
+        }
+        val completeBooks = mapOf(
+            "Obadias/Jonas" to listOf("Obadias 1:1-21", "Jonas 1-4"),
+            "Naum/Habacuque" to listOf("Naum 1-3", "Habacuque 1-3"),
+            "Sofonias/Ageu" to listOf("Sofonias 1-3", "Ageu 1-2"),
+            "Tito/Filêmon" to listOf("Tito 1-3", "Filêmon 1:1-25"),
+            "2 João/3 João/Judas" to listOf("2 João 1:1-13", "3 João 1:1-14", "Judas 1:1-25")
+        )
+
+        if (chapters.equals("Livro completo", ignoreCase = true) ||
+            chapters.equals("Livros completos", ignoreCase = true)) {
+            completeBooks[book]?.let { return it.joinToString("; ") }
+        }
+
+        // Se futuramente houver outro grupo de livros separado por '/',
+        // evita pesquisar o texto combinado como se fosse um único nome.
+        if ('/' in book && (chapters.equals("Livro completo", true) ||
+                    chapters.equals("Livros completos", true))) {
+            return book.split('/').map { it.trim() }.joinToString("; ") { "$it 1" }
+        }
+
+        return "$book $chapters"
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun showReading(reading: BibleReading) {
         currentReading = reading
-        val query = URLEncoder.encode("${reading.book} ${reading.chapters}", "UTF-8")
+        val queryText = buildBibleSearchQuery(reading)
+        val query = URLEncoder.encode(queryText, "UTF-8")
         val url = "https://wol.jw.org/pt/wol/l/r5/lp-t?q=$query"
 
         val page = LinearLayout(this).apply {
